@@ -31,6 +31,31 @@ func TestCreateHash(t *testing.T) {
 	}
 }
 
+func TestComparePasswordAndHashArgon2i(t *testing.T) {
+	hash, err := Create2IHash("fishyfishypassword!123", DefaultParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	match, err := ComparePasswordAndHash("fishyfishypassword!123", hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !match {
+		t.Error("expected password and hash to match")
+	}
+
+	match, err = ComparePasswordAndHash("otherPa$$word", hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if match {
+		t.Error("expected password and hash to not match")
+	}
+}
+
 func TestComparePasswordAndHash(t *testing.T) {
 	hash, err := CreateHash("pa$$word", DefaultParams)
 	if err != nil {

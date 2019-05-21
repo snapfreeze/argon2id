@@ -24,7 +24,8 @@ var (
 
 	// ErrIncompatibleVersion in returned by ComparePasswordAndHash if the
 	// provided hash was created using a different version of Argon2.
-	ErrIncompatibleVersion = errors.New("argon2id: incompatible version of argon2")
+	ErrIncompatibleVersion   = errors.New("argon2id: incompatible version of argon2")
+	ErrIncompatibleArgonType = errors.New("argon2id: incompatible argon type identifier")
 )
 
 // DefaultParams provides some sane default parameters for hashing passwords.
@@ -89,17 +90,40 @@ func CreateHash(password string, params *Params) (hash string, err error) {
 	return hash, nil
 }
 
+// Create2IHash returns a Argon2i hash of a plain-text password using the
+// provided algorithm parameters.
+func Create2IHash(password string, params *Params) (hash string, err error) {
+	salt, err := generateRandomBytes(params.SaltLength)
+	if err != nil {
+		return "", err
+	}
+
+	key := argon2.Key([]byte(password), salt, params.Iterations, params.Memory, params.Parallelism, params.KeyLength)
+
+	b64Salt := base64.RawStdEncoding.EncodeToString(salt)
+	b64Key := base64.RawStdEncoding.EncodeToString(key)
+
+	hash = fmt.Sprintf("$argon2i$v=%d$m=%d,t=%d,p=%d$%s$%s", argon2.Version, params.Memory, params.Iterations, params.Parallelism, b64Salt, b64Key)
+	return hash, nil
+}
+
 // ComparePasswordAndHash performs a constant-time comparison between a
 // plain-text password and Argon2id hash, using the parameters and salt
 // contained in the hash. It returns true if they match, otherwise it returns
 // false.
 func ComparePasswordAndHash(password, hash string) (match bool, err error) {
-	params, salt, key, err := decodeHash(hash)
+	argonType, params, salt, key, err := decodeHash(hash)
 	if err != nil {
 		return false, err
 	}
 
-	otherKey := argon2.IDKey([]byte(password), salt, params.Iterations, params.Memory, params.Parallelism, params.KeyLength)
+	var otherKey []byte
+
+	if argonType == "argon2i" {
+		otherKey = argon2.Key([]byte(password), salt, params.Iterations, params.Memory, params.Parallelism, params.KeyLength)
+	} else {
+		otherKey = argon2.IDKey([]byte(password), salt, params.Iterations, params.Memory, params.Parallelism, params.KeyLength)
+	}
 
 	if subtle.ConstantTimeCompare(key, otherKey) == 1 {
 		return true, nil
@@ -117,38 +141,42 @@ func generateRandomBytes(n uint32) ([]byte, error) {
 	return b, nil
 }
 
-func decodeHash(hash string) (params *Params, salt, key []byte, err error) {
+func decodeHash(hash string) (argonType string, params *Params, salt, key []byte, err error) {
 	vals := strings.Split(hash, "$")
 	if len(vals) != 6 {
-		return nil, nil, nil, ErrInvalidHash
+		return "", nil, nil, nil, ErrInvalidHash
+	}
+
+	if vals[1] != "argon2i" && vals[1] != "argon2id" {
+		return "", nil, nil, nil, ErrIncompatibleArgonType
 	}
 
 	var version int
 	_, err = fmt.Sscanf(vals[2], "v=%d", &version)
 	if err != nil {
-		return nil, nil, nil, err
+		return "", nil, nil, nil, err
 	}
 	if version != argon2.Version {
-		return nil, nil, nil, ErrIncompatibleVersion
+		return "", nil, nil, nil, ErrIncompatibleVersion
 	}
 
 	params = &Params{}
 	_, err = fmt.Sscanf(vals[3], "m=%d,t=%d,p=%d", &params.Memory, &params.Iterations, &params.Parallelism)
 	if err != nil {
-		return nil, nil, nil, err
+		return "", nil, nil, nil, err
 	}
 
 	salt, err = base64.RawStdEncoding.DecodeString(vals[4])
 	if err != nil {
-		return nil, nil, nil, err
+		return "", nil, nil, nil, err
 	}
 	params.SaltLength = uint32(len(salt))
 
 	key, err = base64.RawStdEncoding.DecodeString(vals[5])
 	if err != nil {
-		return nil, nil, nil, err
+		return "", nil, nil, nil, err
 	}
 	params.KeyLength = uint32(len(key))
 
-	return params, salt, key, nil
+	return vals[1], params, salt, key, nil
 }
